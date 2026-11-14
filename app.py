@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
-
+import numpy as np
+import joblib
+import tensorflow as tf
 st.set_page_config(
     page_title="Cloud Security Monitor",
     page_icon="🔐",
@@ -214,3 +216,206 @@ if phase2_file is not None:
         )
 
         st.success("Phase 2 report processed successfully!")
+# ==========================================
+# PHASE 3: LSTM ANOMALY DETECTION
+# ==========================================
+
+st.divider()
+st.header("Phase 3: LSTM-Based Anomaly Detection")
+
+st.write(
+    "Upload a cloud audit log CSV containing "
+    "10 events per sequence for LSTM prediction."
+)
+
+@st.cache_resource
+def load_lstm_components():
+    model = tf.keras.models.load_model(
+        "cloud_anomaly_lstm.keras"
+    )
+
+    scaler = joblib.load("lstm_scaler.pkl")
+
+    config = joblib.load("lstm_feature_config.pkl")
+
+    return model, scaler, config
+
+
+try:
+    lstm_model, lstm_scaler, lstm_config = (
+        load_lstm_components()
+    )
+
+    st.success("LSTM model loaded successfully!")
+
+    lstm_file = st.file_uploader(
+        "Upload LSTM Audit Dataset",
+        type=["csv"],
+        key="lstm_upload"
+    )
+
+    if lstm_file is not None:
+
+        lstm_df = pd.read_csv(lstm_file)
+
+        features = lstm_config["features"]
+        sequence_length = lstm_config["sequence_length"]
+
+        required = ["sequence_id"] + features
+
+        missing = [
+            col for col in required
+            if col not in lstm_df.columns
+        ]
+
+        if missing:
+            st.error(
+                f"Missing required columns: {missing}"
+            )
+
+        else:
+
+            if "timestamp" in lstm_df.columns:
+                lstm_df = lstm_df.sort_values(
+                    ["sequence_id", "timestamp"]
+                )
+
+            predictions = []
+
+            for sequence_id, group in lstm_df.groupby(
+                "sequence_id", sort=True
+            ):
+
+                if len(group) != sequence_length:
+                    continue
+
+                sequence = group[features].to_numpy(
+                    dtype=np.float32
+                )
+
+                sequence_scaled = lstm_scaler.transform(
+                    sequence
+                )
+
+                sequence_scaled = sequence_scaled.reshape(
+                    1,
+                    sequence_length,
+                    len(features)
+                )
+
+                probability = float(
+                    lstm_model.predict(
+                        sequence_scaled,
+                        verbose=0
+                    )[0][0]
+                )
+
+                status = (
+                    "ANOMALY"
+                    if probability >= 0.5
+                    else "NORMAL"
+                )
+
+                predictions.append({
+                    "Sequence ID": sequence_id,
+                    "Anomaly Probability": round(
+                        probability * 100, 2
+                    ),
+                    "Prediction": status
+                })
+
+            if predictions:
+
+                result_df = pd.DataFrame(predictions)
+
+                total_sequences = len(result_df)
+
+                anomaly_count = (
+                    result_df["Prediction"] == "ANOMALY"
+                ).sum()
+
+                normal_count = (
+                    result_df["Prediction"] == "NORMAL"
+                ).sum()
+
+                st.subheader("LSTM Prediction Summary")
+
+                col1, col2, col3 = st.columns(3)
+
+                col1.metric(
+                    "Total Sequences",
+                    total_sequences
+                )
+
+                col2.metric(
+                    "Normal Sequences",
+                    int(normal_count)
+                )
+
+                col3.metric(
+                    "Anomalous Sequences",
+                    int(anomaly_count)
+                )
+
+                st.subheader("Prediction Chart")
+
+                chart_df = pd.DataFrame({
+                    "Status": ["Normal", "Anomaly"],
+                    "Count": [
+                        int(normal_count),
+                        int(anomaly_count)
+                    ]
+                })
+
+                st.bar_chart(
+                    chart_df,
+                    x="Status",
+                    y="Count"
+                )
+
+                st.subheader("LSTM Prediction Results")
+
+                st.dataframe(
+                    result_df,
+                    use_container_width=True
+                )
+
+                suspicious = result_df[
+                    result_df["Prediction"] == "ANOMALY"
+                ]
+
+                if not suspicious.empty:
+                    st.warning(
+                        f"{len(suspicious)} suspicious "
+                        "sequences detected by LSTM."
+                    )
+                    st.dataframe(
+                        suspicious,
+                        use_container_width=True
+                    )
+                else:
+                    st.success(
+                        "No anomalous sequences detected."
+                    )
+
+                st.download_button(
+                    "Download LSTM Prediction Report",
+                    result_df.to_csv(
+                        index=False
+                    ).encode("utf-8"),
+                    "lstm_prediction_report.csv",
+                    "text/csv",
+                    key="lstm_download"
+                )
+
+            else:
+                st.error(
+                    "No valid sequences found. "
+                    "Each sequence must contain exactly "
+                    f"{sequence_length} events."
+                )
+
+except Exception as e:
+    st.error(
+        f"Could not load the LSTM model: {e}"
+    )
