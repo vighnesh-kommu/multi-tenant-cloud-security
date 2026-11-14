@@ -500,11 +500,12 @@ if lstm_results is not None and not lstm_results.empty:
     )
 
 else:
-    lstm_status = "NORMAL"
+    lstm_status = "UNAVAILABLE"
 
     st.warning(
-        "Upload an LSTM dataset first. "
-        "Until then, LSTM status defaults to NORMAL."
+        "LSTM prediction unavailable. "
+        "Upload an LSTM dataset before making "
+        "a security decision."
     )
 
 if st.button("Run Integrated Security Check"):
