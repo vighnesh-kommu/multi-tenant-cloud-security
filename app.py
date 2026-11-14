@@ -327,6 +327,8 @@ try:
             if predictions:
 
                 result_df = pd.DataFrame(predictions)
+                # Store actual LSTM predictions for Phase 4
+st.session_state["lstm_results"] = result_df.copy()
 
                 total_sequences = len(result_df)
 
@@ -473,11 +475,37 @@ with col2:
     )
 
 # Select LSTM result
-lstm_status = st.selectbox(
-    "LSTM Detection Result",
-    ["NORMAL", "ANOMALY"],
-    key="integrated_lstm_status"
-)
+ # Select an actual LSTM prediction
+lstm_results = st.session_state.get("lstm_results")
+
+if lstm_results is not None and not lstm_results.empty:
+
+    sequence_options = (
+        lstm_results["Sequence ID"].tolist()
+    )
+
+    selected_sequence = st.selectbox(
+        "Select LSTM Sequence",
+        sequence_options
+    )
+
+    selected_result = lstm_results[
+        lstm_results["Sequence ID"] == selected_sequence
+    ].iloc[0]
+
+    lstm_status = selected_result["Prediction"]
+
+    st.info(
+        f"Actual LSTM Prediction: {lstm_status}"
+    )
+
+else:
+    lstm_status = "NORMAL"
+
+    st.warning(
+        "Upload an LSTM dataset first. "
+        "Until then, LSTM status defaults to NORMAL."
+    )
 
 if st.button("Run Integrated Security Check"):
 
