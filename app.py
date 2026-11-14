@@ -328,7 +328,7 @@ try:
 
                 result_df = pd.DataFrame(predictions)
                 # Store actual LSTM predictions for Phase 4
-st.session_state["lstm_results"] = result_df.copy()
+                st.session_state["lstm_results"] = result_df.copy()
 
                 total_sequences = len(result_df)
 
