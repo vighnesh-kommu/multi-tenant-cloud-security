@@ -522,7 +522,7 @@ if st.button("Run Integrated Security Check"):
         reasons.append("LSTM Detected Suspicious Activity")
     
     if lstm_status == "UNAVAILABLE":
-    reasons.append("LSTM Prediction Unavailable")
+        reasons.append("LSTM Prediction Unavailable")
     
     if reasons:
         final_decision = "BLOCK"
