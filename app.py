@@ -1,188 +1,116 @@
-import streamlit as st
-import pandas as pd
 
-st.set_page_config(
-    page_title="Multi-Tenant Cloud Security",
-    page_icon="🔐",
-    layout="wide"
+# ==========================================
+# PHASE 2: ROLE-BASED ACCESS CONTROL DASHBOARD
+# ==========================================
+
+st.divider()
+st.header("Phase 2: Multi-Tenant Access Control")
+
+st.write(
+    "Upload the Phase 2 security report generated "
+    "from Google Colab."
 )
 
-st.title("🔐 Multi-Tenant Cloud Security")
-st.subheader("Anomaly Detection & Data Leakage Prevention")
-
-st.sidebar.title("Security Controls")
-
-uploaded_file = st.file_uploader(
-    "Upload Cloud Audit Log CSV",
-    type=["csv"]
+phase2_file = st.file_uploader(
+    "Upload Phase 2 Security Report",
+    type=["csv"],
+    key="phase2_upload"
 )
 
-if uploaded_file is not None:
+if phase2_file is not None:
 
-    df = pd.read_csv(uploaded_file)
+    phase2_df = pd.read_csv(phase2_file)
 
-    required = [
-        "user_id", "user_tenant",
-        "resource_tenant", "status",
-        "anomaly_status", "security_action"
+    required_columns = [
+        "tenant_id",
+        "resource_tenant",
+        "user_role",
+        "action",
+        "security_decision",
+        "reason"
     ]
 
-    if not all(col in df.columns for col in required):
-        st.error("Invalid CSV format. Please upload the corrected report.")
+    missing_columns = [
+        col for col in required_columns
+        if col not in phase2_df.columns
+    ]
+
+    if missing_columns:
+        st.error(f"Missing columns: {missing_columns}")
 
     else:
-
-        # Normalize values
-        for col in [
-            "anomaly_status", "security_action", "status"
-        ]:
-            df[col] = df[col].astype(str).str.strip().str.upper()
-
-        # Explain detected events
-        def get_reason(row):
-            reasons = []
-
-            if row["user_tenant"] != row["resource_tenant"]:
-                reasons.append("Cross-Tenant Access")
-
-            if row["status"] == "FAILED":
-                reasons.append("Failed Login")
-
-            if row["status"] == "FAILED":
-                if row["user_id"] in repeated_users:
-                    reasons.append("Repeated Failed Login")
-
-            return ", ".join(reasons) if reasons else "Authorized Activity"
-
-        failed_counts = (
-            df[df["status"] == "FAILED"]
-            .groupby("user_id").size()
+        phase2_df["security_decision"] = (
+            phase2_df["security_decision"]
+            .astype(str).str.strip().str.upper()
         )
 
-        repeated_users = set(
-            failed_counts[failed_counts >= 3].index
-        )
+        # Security metrics
+        total = len(phase2_df)
 
-        df["detection_reason"] = df.apply(
-            get_reason, axis=1
-        )
+        allowed = (
+            phase2_df["security_decision"] == "ALLOW"
+        ).sum()
 
-        # Overview
-        total = len(df)
-        normal = (df["anomaly_status"] == "NORMAL").sum()
-        anomalies = (df["anomaly_status"] == "ANOMALY").sum()
-        blocked = (df["security_action"] == "BLOCK").sum()
+        blocked = (
+            phase2_df["security_decision"] == "BLOCK"
+        ).sum()
 
-        st.success("Audit logs analyzed successfully!")
+        st.subheader("Access Control Summary")
 
-        st.header("Security Overview")
+        col1, col2, col3 = st.columns(3)
 
-        c1, c2, c3, c4 = st.columns(4)
-
-        c1.metric("Total Events", total)
-        c2.metric("Normal Events", normal)
-        c3.metric("Anomalies", anomalies)
-        c4.metric("Blocked Events", blocked)
-
-        st.divider()
+        col1.metric("Total Requests", total)
+        col2.metric("Allowed", allowed)
+        col3.metric("Blocked", blocked)
 
         # Tenant filter
-        st.header("Tenant-wise Monitoring")
+        st.subheader("Tenant-wise Monitoring")
 
         tenants = ["All Tenants"] + sorted(
-            df["user_tenant"].dropna().unique().tolist()
+            phase2_df["tenant_id"].dropna().unique().tolist()
         )
 
-        selected_tenant = st.sidebar.selectbox(
+        selected_tenant = st.selectbox(
             "Select Tenant",
-            tenants
+            tenants,
+            key="phase2_tenant_filter"
         )
 
         if selected_tenant == "All Tenants":
-            view = df.copy()
+            filtered_df = phase2_df.copy()
         else:
-            view = df[
-                df["user_tenant"] == selected_tenant
-            ].copy()
-
-        st.write("Selected Tenant:", selected_tenant)
-        st.metric("Events in Selected View", len(view))
-
-        # Charts
-        st.header("Anomaly Analysis")
-
-        chart_data = pd.DataFrame({
-            "Event Type": ["Normal", "Anomaly"],
-            "Count": [
-                normal,
-                anomalies
+            filtered_df = phase2_df[
+                phase2_df["tenant_id"] == selected_tenant
             ]
-        })
 
-        st.bar_chart(
-            chart_data,
-            x="Event Type",
-            y="Count"
-        )
+        st.subheader("Access Request Records")
+        st.dataframe(filtered_df, use_container_width=True)
 
-        # Reasons
-        st.header("Detection Reasons")
+        # Security alerts
+        st.subheader("Security Alerts")
 
-        reason_counts = (
-            df[df["anomaly_status"] == "ANOMALY"]
-            ["detection_reason"]
-            .value_counts()
-            .reset_index()
-        )
-
-        if not reason_counts.empty:
-            st.bar_chart(
-                reason_counts,
-                x="detection_reason",
-                y="count"
-            )
-
-        # Audit logs
-        st.header("Cloud Audit Logs")
-
-        st.dataframe(
-            view,
-            use_container_width=True
-        )
-
-        # Alerts
-        st.header("🚨 Security Alerts")
-
-        alerts = view[
-            view["security_action"] == "BLOCK"
+        alerts = filtered_df[
+            filtered_df["security_decision"] == "BLOCK"
         ]
 
         if not alerts.empty:
-            st.error(
-                str(len(alerts)) +
-                " blocked events detected in this view!"
-            )
-
+            st.warning(f"{len(alerts)} blocked requests detected.")
             st.dataframe(
-                alerts[[
-                    "user_id",
-                    "user_tenant",
-                    "resource_tenant",
-                    "detection_reason",
-                    "security_action"
-                ]],
+                alerts,
                 use_container_width=True
             )
         else:
-            st.success("No blocked events in this view.")
+            st.success("No blocked requests in this selection.")
 
-        # Download
+        # Download report
+        csv_data = phase2_df.to_csv(index=False).encode("utf-8")
+
         st.download_button(
-            "Download Security Report",
-            df.to_csv(index=False),
-            "security_report.csv",
-            "text/csv"
+            label="Download Phase 2 Security Report",
+            data=csv_data,
+            file_name="phase2_security_report.csv",
+            mime="text/csv",
+            key="phase2_download"
         )
 
-else:
-    st.info("Upload your corrected security audit CSV to begin.")
+        st.success("Phase 2 report processed successfully!")
