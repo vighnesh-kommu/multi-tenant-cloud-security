@@ -419,3 +419,98 @@ except Exception as e:
     st.error(
         f"Could not load the LSTM model: {e}"
     )
+# ==========================================
+# PHASE 4: INTEGRATED DETECTION & PREVENTION
+# ==========================================
+
+st.divider()
+st.header("Phase 4: Integrated Security Decision")
+
+st.write(
+    "Combines LSTM anomaly detection with "
+    "Role-Based Access Control (RBAC)."
+)
+
+st.info(
+    "This is a simulated security enforcement workflow."
+)
+
+# Role permissions
+role_permissions = {
+    "Admin": ["READ", "WRITE", "DELETE"],
+    "Developer": ["READ", "WRITE"],
+    "Viewer": ["READ"]
+}
+
+st.subheader("Test an Access Request")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    user_tenant = st.selectbox(
+        "User Tenant",
+        ["Tenant_A", "Tenant_B"],
+        key="integrated_user_tenant"
+    )
+
+    user_role = st.selectbox(
+        "User Role",
+        ["Admin", "Developer", "Viewer"],
+        key="integrated_user_role"
+    )
+
+with col2:
+    resource_tenant = st.selectbox(
+        "Resource Tenant",
+        ["Tenant_A", "Tenant_B"],
+        key="integrated_resource_tenant"
+    )
+
+    action = st.selectbox(
+        "Requested Action",
+        ["READ", "WRITE", "DELETE"],
+        key="integrated_action"
+    )
+
+# Select LSTM result
+lstm_status = st.selectbox(
+    "LSTM Detection Result",
+    ["NORMAL", "ANOMALY"],
+    key="integrated_lstm_status"
+)
+
+if st.button("Run Integrated Security Check"):
+
+    reasons = []
+
+    if user_tenant != resource_tenant:
+        reasons.append("Cross-Tenant Access")
+
+    if action not in role_permissions[user_role]:
+        reasons.append("Insufficient Role Permission")
+
+    if lstm_status == "ANOMALY":
+        reasons.append("LSTM Detected Suspicious Activity")
+
+    if reasons:
+        final_decision = "BLOCK"
+        st.error("ACCESS BLOCKED")
+    else:
+        final_decision = "ALLOW"
+        st.success("ACCESS ALLOWED")
+
+    st.subheader("Security Decision Report")
+
+    st.write("User Tenant:", user_tenant)
+    st.write("Resource Tenant:", resource_tenant)
+    st.write("User Role:", user_role)
+    st.write("Requested Action:", action)
+    st.write("LSTM Status:", lstm_status)
+    st.write("Final Decision:", final_decision)
+
+    if reasons:
+        st.write("Security Reasons:")
+        for reason in reasons:
+            st.write("- ", reason)
+    else:
+        st.write("Reason: Authorized access and normal activity.")
