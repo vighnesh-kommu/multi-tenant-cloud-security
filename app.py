@@ -628,3 +628,77 @@ st.download_button(
     file_name="final_validation_report.csv",
     mime="text/csv"
 )
+
+# ==========================================
+# PHASE 12: FIREBASE CLOUD AUDIT LOG VIEWER
+# ==========================================
+
+st.divider()
+st.header("Phase 12: Firebase Cloud Audit Logs")
+
+st.write(
+    "View security events stored in Firebase Firestore."
+)
+
+if st.button("Load Firebase Audit Logs"):
+
+    try:
+        documents = (
+            db.collection("audit_logs")
+            .order_by(
+                "timestamp",
+                direction=firestore.Query.DESCENDING
+            )
+            .limit(100)
+            .stream()
+        )
+
+        audit_records = []
+
+        for document in documents:
+            record = document.to_dict()
+            record["Document ID"] = document.id
+            audit_records.append(record)
+
+        if audit_records:
+
+            audit_df = pd.DataFrame(audit_records)
+
+            st.success(
+                f"Loaded {len(audit_df)} Firebase audit events."
+            )
+
+            total = len(audit_df)
+            allowed = (
+                audit_df["decision"] == "ALLOW"
+            ).sum()
+            blocked = (
+                audit_df["decision"] == "BLOCK"
+            ).sum()
+
+            col1, col2, col3 = st.columns(3)
+
+            col1.metric("Total Events", total)
+            col2.metric("Allowed", int(allowed))
+            col3.metric("Blocked", int(blocked))
+
+            st.subheader("Cloud Security Event Records")
+
+            st.dataframe(
+                audit_df,
+                use_container_width=True
+            )
+
+            st.download_button(
+                "Download Firebase Audit Report",
+                audit_df.to_csv(index=False).encode("utf-8"),
+                "firebase_audit_logs.csv",
+                "text/csv",
+                key="firebase_audit_download"
+            )
+
+        else:
+            st.info("No Firebase audit records found.")
+
+    except Exception as e:
+        st.error(f"Could not load Firebase logs: {e}")
