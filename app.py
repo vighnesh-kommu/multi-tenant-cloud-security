@@ -281,12 +281,20 @@ try:
                     ["sequence_id", "timestamp"]
                 )
 
-            predictions = []
+            valid_sequences = []
+            valid_sequence_ids = []
+
+            for sequence_id, group in lstm_df.groupby("sequence_id", sort=True):
+                if len(group) != sequence_length:
+                    continue
+                    sequence = group[features].to_numpy(dtype=np.float32)
+                    
+            valid_sequences = []
+            valid_sequence_ids = []
 
             for sequence_id, group in lstm_df.groupby(
                 "sequence_id", sort=True
             ):
-
                 if len(group) != sequence_length:
                     continue
 
@@ -294,36 +302,43 @@ try:
                     dtype=np.float32
                 )
 
-                sequence_scaled = lstm_scaler.transform(
-                    sequence
-                )
+                valid_sequences.append(sequence)
+                valid_sequence_ids.append(sequence_id)
 
-                sequence_scaled = sequence_scaled.reshape(
-                    1,
-                    sequence_length,
-                    len(features)
-                )
+            predictions = []
 
-                probability = float(
-                    lstm_model.predict(
-                        sequence_scaled,
-                        verbose=0
-                    )[0][0]
-                )
+            if valid_sequences:
+                batch = np.stack(valid_sequences)
 
-                status = (
-                    "ANOMALY"
-                    if probability >= 0.5
-                    else "NORMAL"
-                )
+                original_shape = batch.shape
+                batch_2d = batch.reshape(-1, len(features))
 
-                predictions.append({
-                    "Sequence ID": sequence_id,
-                    "Anomaly Probability": round(
-                        probability * 100, 2
-                    ),
-                    "Prediction": status
-                })
+                batch_scaled = lstm_scaler.transform(batch_2d)
+                batch_scaled = batch_scaled.reshape(original_shape)
+
+                probabilities = lstm_model.predict(
+                    batch_scaled,
+                    verbose=0,
+                    batch_size=32
+                ).reshape(-1)
+
+                for sequence_id, probability in zip(
+                    valid_sequence_ids, probabilities
+                ):
+                    status = (
+                        "ANOMALY"
+                        if probability >= 0.5
+                        else "NORMAL"
+                    )
+
+                    predictions.append({
+                        "Sequence ID": sequence_id,
+                        "Anomaly Probability": round(
+                            float(probability) * 100, 2
+                        ),
+                        "Prediction": status
+                    })
+
 
             if predictions:
 
