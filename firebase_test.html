@@ -1,0 +1,163 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Multi-Tenant Cloud Security Test</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f3f5f9;
+      padding: 20px;
+    }
+    .container {
+      max-width: 500px;
+      margin: auto;
+      background: white;
+      padding: 22px;
+      border-radius: 12px;
+    }
+    input, button {
+      width: 100%;
+      padding: 12px;
+      margin: 8px 0;
+      box-sizing: border-box;
+    }
+    button {
+      background: #1769aa;
+      color: white;
+      border: none;
+      border-radius: 6px;
+    }
+    #result {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      background: #eef2f7;
+      padding: 12px;
+      margin-top: 15px;
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h2>🔐 Multi-Tenant Cloud Security</h2>
+  <p>Firebase Authentication & Firestore Isolation Test</p>
+
+  <h3>Login</h3>
+  <input id="email" type="email" placeholder="Email">
+  <input id="password" type="password" placeholder="Password">
+
+  <button id="loginBtn">Login</button>
+  <button id="logoutBtn">Logout</button>
+
+  <h3>Tenant Data Access Test</h3>
+  <button id="tenantABtn">Read Tenant A Data</button>
+  <button id="tenantBBtn">Read Tenant B Data</button>
+
+  <div id="result">Please login to start.</div>
+</div>
+
+<script type="module">
+  import { initializeApp } from
+    "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+
+  import {
+    getAuth,
+    signInWithEmailAndPassword,
+    signOut
+  } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+
+  import {
+    getFirestore,
+    collection,
+    getDocs
+  } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyDyAqQKO-0cB1CCgVb3JYvn2FSfgPWKK7o",
+    authDomain: "multi-tenant-cloud-security.firebaseapp.com",
+    projectId: "multi-tenant-cloud-security",
+    storageBucket: "multi-tenant-cloud-security.firebasestorage.app",
+    messagingSenderId: "241642930606",
+    appId: "1:241642930606:web:08e08cde26360cecdf883f"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
+
+  const result = document.getElementById("result");
+
+  document.getElementById("loginBtn").addEventListener("click", async () => {
+    const email = document.getElementById("email").value.trim();
+    const password = document.getElementById("password").value;
+
+    try {
+      const credential = await signInWithEmailAndPassword(auth, email, password);
+      result.textContent = "LOGIN SUCCESSFUL\nUID: " + credential.user.uid;
+    } catch (error) {
+      result.textContent = "LOGIN FAILED\n" + error.code + "\n" + error.message;
+    }
+  });
+
+  document.getElementById("logoutBtn").addEventListener("click", async () => {
+    try {
+      await signOut(auth);
+      result.textContent = "Logged out successfully.";
+    } catch (error) {
+      result.textContent = "LOGOUT FAILED: " + error.message;
+    }
+  });
+
+  async function readTenant(tenantId) {
+    if (!auth.currentUser) {
+      result.textContent = "Please login first.";
+      return;
+    }
+
+    result.textContent = "Checking access to " + tenantId + "...";
+
+    try {
+      const snapshot = await getDocs(
+        collection(db, "tenants", tenantId, "documents")
+      );
+
+      if (snapshot.empty) {
+        result.textContent =
+          "ACCESS ALLOWED\nNo documents found for " + tenantId;
+        return;
+      }
+
+      let output = "ACCESS ALLOWED\nTenant: " + tenantId + "\n\n";
+
+      snapshot.forEach((doc) => {
+        output += JSON.stringify(doc.data(), null, 2) + "\n";
+      });
+
+      result.textContent = output;
+    } catch (error) {
+      if (
+        error.code === "permission-denied" ||
+        error.code === "firestore/permission-denied"
+      ) {
+        result.textContent =
+          "ACCESS DENIED\nFirestore Security Rules blocked access to " +
+          tenantId;
+      } else {
+        result.textContent =
+          "REQUEST FAILED\n" + error.code + "\n" + error.message;
+      }
+    }
+  }
+
+  document.getElementById("tenantABtn").addEventListener("click", () => {
+    readTenant("Tenant_A");
+  });
+
+  document.getElementById("tenantBBtn").addEventListener("click", () => {
+    readTenant("Tenant_B");
+  });
+</script>
+</body>
+</html>
