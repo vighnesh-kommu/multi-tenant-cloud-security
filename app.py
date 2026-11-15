@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import joblib
 import tensorflow as tf
+from security_logic import make_security_decision
 st.set_page_config(
     page_title="Cloud Security Monitor",
     page_icon="🔐",
