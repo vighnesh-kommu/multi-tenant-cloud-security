@@ -511,25 +511,17 @@ else:
 
 if st.button("Run Integrated Security Check"):
 
-    reasons = []
+    final_decision, reasons = make_security_decision(
+        user_tenant,
+        resource_tenant,
+        user_role,
+        action,
+        lstm_status
+    )
 
-    if user_tenant != resource_tenant:
-        reasons.append("Cross-Tenant Access")
-
-    if action not in role_permissions[user_role]:
-        reasons.append("Insufficient Role Permission")
-
-    if lstm_status == "ANOMALY":
-        reasons.append("LSTM Detected Suspicious Activity")
-    
-    if lstm_status == "UNAVAILABLE":
-        reasons.append("LSTM Prediction Unavailable")
-    
-    if reasons:
-        final_decision = "BLOCK"
+    if final_decision == "BLOCK":
         st.error("ACCESS BLOCKED")
     else:
-        final_decision = "ALLOW"
         st.success("ACCESS ALLOWED")
 
     st.subheader("Security Decision Report")
