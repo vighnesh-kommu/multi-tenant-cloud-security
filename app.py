@@ -7,7 +7,7 @@ from security_logic import make_security_decision
 st.set_page_config(
     page_title="Cloud Security Monitor",
     page_icon="🔐",
-    layout="wide"
+    layout="wide" 
 )
 
 st.title("🔐 Multi-Tenant Cloud Security")
