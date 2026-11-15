@@ -1,3 +1,5 @@
+import firebase_admin
+from firebase_admin import credentials, firestore
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -9,7 +11,21 @@ st.set_page_config(
     page_icon="🔐",
     layout="wide" 
 )
+@st.cache_resource
+def initialize_firebase():
+    cred = credentials.Certificate(
+        dict(st.secrets["firebase"])
+    )
 
+    try:
+        app = firebase_admin.get_app()
+    except ValueError:
+        app = firebase_admin.initialize_app(cred)
+
+    return firestore.client(app=app)
+
+
+db = initialize_firebase()
 st.title("🔐 Multi-Tenant Cloud Security")
 st.subheader("Anomaly Detection and Data Leakage Prevention")
 
@@ -554,6 +570,25 @@ if st.button("Run Integrated Security Check"):
             st.write("- ", reason)
     else:
         st.write("Reason: Authorized access and normal activity.")
+            # Save security decision to Firebase Firestore
+    try:
+        audit_record = {
+            "user_tenant": user_tenant,
+            "resource_tenant": resource_tenant,
+            "user_role": user_role,
+            "action": action,
+            "lstm_status": lstm_status,
+            "decision": final_decision,
+            "reasons": reasons,
+            "timestamp": firestore.SERVER_TIMESTAMP
+        }
+
+        db.collection("audit_logs").add(audit_record)
+
+        st.success("Security event saved to Firebase Firestore!")
+
+    except Exception as e:
+        st.error(f"Firebase logging failed: {e}")
 # PHASE 11: FINAL VALIDATION REPORT
 
 st.header("Phase 11: Final Security Validation")
