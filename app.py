@@ -1,34 +1,79 @@
-import firebase_admin
-from firebase_admin import credentials, firestore, auth
-import streamlit as st
+"""Multi-Tenant Cloud Security Monitoring Application."""
+
 import requests
-import pandas as pd
-import numpy as np
 import joblib
+import numpy as np
+import pandas as pd
+import streamlit as st
 import tensorflow as tf
+import firebase_admin
+
+from pathlib import Path
+from datetime import datetime, timezone
+
+from firebase_admin import auth, credentials, firestore
 from security_logic import make_security_decision
+
+
+# --------------------------------------------------
+# 1. APPLICATION CONFIGURATION
+# --------------------------------------------------
+
 st.set_page_config(
     page_title="Cloud Security Monitor",
     page_icon="🔐",
-    layout="wide" 
+    layout="wide",
 )
+
+st.title("🔐 Multi-Tenant Cloud Security")
+st.subheader("Anomaly Detection and Data Leakage Prevention")
+
+TENANTS = ["Tenant_A", "Tenant_B"]
+ROLES = ["Admin", "Developer", "Viewer"]
+
+MODEL_PATH = Path("cloud_anomaly_lstm.keras")
+SCALER_PATH = Path("lstm_scaler.pkl")
+CONFIG_PATH = Path("lstm_feature_config.pkl")
+
+LSTM_THRESHOLD = 0.5
+
+
+# --------------------------------------------------
+# 2. FIREBASE INITIALIZATION
+# --------------------------------------------------
+
 @st.cache_resource
 def initialize_firebase():
-    cred = credentials.Certificate(
-        dict(st.secrets["firebase"])
-    )
+    """Initialize Firebase Admin and return Firestore client."""
+
+    firebase_data = dict(st.secrets["firebase"])
+    firebase_credentials = credentials.Certificate(firebase_data)
 
     try:
-        app = firebase_admin.get_app()
+        firebase_app = firebase_admin.get_app()
     except ValueError:
-        app = firebase_admin.initialize_app(cred)
+        firebase_app = firebase_admin.initialize_app(
+            firebase_credentials
+        )
 
-    return firestore.client(app=app)
+    return firestore.client(app=firebase_app)
 
 
-db = initialize_firebase()
+try:
+    db = initialize_firebase()
+except Exception as error:
+    st.error("Firebase initialization failed.")
+    st.caption(str(error))
+    st.stop()
+
+
+# --------------------------------------------------
+# 3. FIREBASE AUTHENTICATION
+# --------------------------------------------------
 
 def firebase_login(email, password):
+    """Authenticate a user using Firebase Email/Password."""
+
     api_key = st.secrets["firebase_web"]["api_key"]
 
     url = (
@@ -36,810 +81,730 @@ def firebase_login(email, password):
         f"accounts:signInWithPassword?key={api_key}"
     )
 
+    payload = {
+        "email": email,
+        "password": password,
+        "returnSecureToken": True,
+    }
+
     response = requests.post(
         url,
-        json={
-            "email": email,
-            "password": password,
-            "returnSecureToken": True
-        },
-        timeout=15
+        json=payload,
+        timeout=15,
     )
 
-    if response.status_code != 200:
-        error_data = response.json()
-        message = error_data.get("error", {}).get(
-            "message", "Login failed"
-        )
-        raise ValueError(message)
+    result = response.json()
 
-    return response.json()["idToken"]
+    if response.status_code != 200:
+        error_message = (
+            result.get("error", {}).get("message", "Login failed")
+        )
+        raise ValueError(error_message)
+
+    return result["idToken"]
 
 
 def get_authenticated_profile(id_token):
-    decoded_token = auth.verify_id_token(id_token)
-    uid = decoded_token["uid"]
+    """Verify the Firebase token and load the user's tenant profile."""
 
-    user_doc = db.collection("user_tenants").document(uid).get()
+    decoded_token = auth.verify_id_token(
+        id_token,
+        check_revoked=True,
+    )
 
-    if not user_doc.exists:
-        raise ValueError("No tenant mapping found for this user.")
+    user_uid = decoded_token["uid"]
 
-    profile = user_doc.to_dict()
+    profile_document = (
+        db.collection("user_tenants")
+        .document(user_uid)
+        .get()
+    )
+
+    if not profile_document.exists:
+        raise ValueError("User tenant profile was not found.")
+
+    profile = profile_document.to_dict()
 
     tenant_id = profile.get("tenant_id")
     role = profile.get("role")
 
-    if tenant_id not in ["Tenant_A", "Tenant_B"]:
-        raise ValueError("Invalid tenant mapping.")
+    if tenant_id not in TENANTS:
+        raise ValueError("Invalid tenant configuration.")
 
-    if role not in ["Admin", "Developer", "Viewer"]:
-        raise ValueError("Invalid user role.")
+    if role not in ROLES:
+        raise ValueError("Invalid user role configuration.")
 
     return {
-        "uid": uid,
-        "email": decoded_token.get("email"),
+        "uid": user_uid,
+        "email": decoded_token.get("email", ""),
         "tenant_id": tenant_id,
-        "role": role
+        "role": role,
     }
 
-# Check whether a user is logged in
-if "firebase_id_token" not in st.session_state:
-    st.session_state["firebase_id_token"] = None
 
-if "user_profile" not in st.session_state:
-    st.session_state["user_profile"] = None
+def clear_login_session():
+    """Clear authentication details from the current session."""
+
+    for key in ("id_token", "user_profile", "lstm_results"):
+        st.session_state.pop(key, None)
 
 
-# Display the login page
-if not st.session_state["firebase_id_token"]:
+def show_login_page():
+    """Display the Firebase login form."""
 
-    st.title("🔐 Multi-Tenant Cloud Security")
-    st.subheader("Firebase Login")
+    st.title("🔑 Secure User Login")
+    st.write("Sign in using your registered Firebase account.")
 
-    with st.form("firebase_login_form"):
-        email = st.text_input("Email")
+    with st.form("login_form"):
+        email = st.text_input("Email address")
         password = st.text_input(
             "Password",
-            type="password"
+            type="password",
         )
 
-        login_button = st.form_submit_button("Login")
+        submitted = st.form_submit_button(
+            "Login",
+            use_container_width=True,
+        )
 
-    if login_button:
+    if submitted:
+        if not email.strip() or not password:
+            st.warning("Enter both email and password.")
+            return
+
         try:
-            token = firebase_login(email, password)
+            token = firebase_login(email.strip(), password)
             profile = get_authenticated_profile(token)
 
-            st.session_state["firebase_id_token"] = token
+            st.session_state["id_token"] = token
             st.session_state["user_profile"] = profile
 
+            st.success("Login successful.")
             st.rerun()
 
-        except Exception as e:
-            st.error(f"Login failed: {e}")
+        except Exception:
+            st.error(
+                "Login failed. Check your credentials and "
+                "Firebase user profile."
+            )
 
-    st.stop()
+
+def require_authenticated_user():
+    """Verify the current session before displaying protected pages."""
+
+    token = st.session_state.get("id_token")
+
+    if not token:
+        show_login_page()
+        st.stop()
+
+    try:
+        profile = get_authenticated_profile(token)
+        st.session_state["user_profile"] = profile
+        return profile
+
+    except Exception:
+        clear_login_session()
+        st.warning("Your session has expired. Please log in again.")
+        st.rerun()
 
 
-# Verify the logged-in user's profile
-try:
-    profile = get_authenticated_profile(
-        st.session_state["firebase_id_token"]
+# --------------------------------------------------
+# 4. TENANT DATA FILTERING
+# --------------------------------------------------
+
+def filter_tenant_data(dataframe, tenant_column, tenant_id):
+    """Return only records belonging to the authenticated tenant."""
+
+    if tenant_column not in dataframe.columns:
+        raise ValueError(
+            f"Required tenant column '{tenant_column}' is missing."
+        )
+
+    return dataframe[
+        dataframe[tenant_column].astype(str).str.strip() == tenant_id
+    ].copy()
+
+
+def display_csv_download(dataframe, filename, label):
+    """Display a CSV download button."""
+
+    csv_data = dataframe.to_csv(index=False).encode("utf-8")
+
+    st.download_button(
+        label=label,
+        data=csv_data,
+        file_name=filename,
+        mime="text/csv",
+        use_container_width=True,
     )
 
-    st.session_state["user_profile"] = profile
 
-except Exception:
-    st.session_state["firebase_id_token"] = None
-    st.session_state["user_profile"] = None
+# --------------------------------------------------
+# 5. AUTHENTICATED DASHBOARD
+# --------------------------------------------------
 
-    st.error("Session expired. Please log in again.")
-    st.stop()
+profile = require_authenticated_user()
 
-
-# Get tenant and role from Firebase
-profile = st.session_state["user_profile"]
-
+user_uid = profile["uid"]
+user_email = profile["email"]
 user_tenant = profile["tenant_id"]
 user_role = profile["role"]
 
+with st.sidebar:
+    st.header("👤 Account Details")
+    st.write(f"**Email:** {user_email}")
+    st.write(f"**Tenant:** {user_tenant}")
+    st.write(f"**Role:** {user_role}")
 
-# Display logged-in account
-st.sidebar.success(
-    f"Logged in: {profile.get('email')}\n"
-    f"Tenant: {user_tenant}\n"
-    f"Role: {user_role}"
+    if st.button("Logout", use_container_width=True):
+        clear_login_session()
+        st.rerun()
+
+
+st.success(f"Authenticated tenant: {user_tenant}")
+
+st.divider()
+
+
+# --------------------------------------------------
+# 6. CLOUD AUDIT LOG DASHBOARD
+# --------------------------------------------------
+
+st.header("📊 Cloud Audit Log Dashboard")
+
+st.info(
+    "Upload an audit log CSV containing the required tenant "
+    "and security columns."
 )
-
-
-# Logout
-if st.sidebar.button("Logout"):
-    st.session_state["firebase_id_token"] = None
-    st.session_state["user_profile"] = None
-    st.rerun()
-
-st.title(" Multi-Tenant Cloud Security")
-st.subheader("Anomaly Detection and Data Leakage Prevention")
-
-st.info("Upload your cloud audit log CSV report.")
 
 uploaded_file = st.file_uploader(
     "Upload Audit Log CSV",
-    type=["csv"]
+    type=["csv"],
+    key="dashboard_csv",
 )
 
 if uploaded_file is not None:
+    try:
+        audit_df = pd.read_csv(uploaded_file)
 
-    df = pd.read_csv(uploaded_file)
+        required_columns = {
+            "user_id",
+            "user_tenant",
+            "resource_tenant",
+            "anomaly_status",
+            "security_action",
+        }
 
-    required = [
-        "user_id",
-        "user_tenant",
-        "resource_tenant",
-        "anomaly_status",
-        "security_action"
-    ]
+        missing_columns = required_columns - set(audit_df.columns)
 
-    if all(col in df.columns for col in required):
-
-        total = len(df)
-        normal = (df["anomaly_status"] == "NORMAL").sum()
-        anomalies = (df["anomaly_status"] == "ANOMALY").sum()
-        blocked = (df["security_action"] == "BLOCK").sum()
-
-        st.success("Audit logs loaded successfully!")
-
-        st.markdown("### Security Overview")
-
-        c1, c2, c3, c4 = st.columns(4)
-
-        c1.metric("Total Events", total)
-        c2.metric("Normal Events", normal)
-        c3.metric("Anomalies", anomalies)
-        c4.metric("Blocked Events", blocked)
-
-        st.markdown("### Anomaly Analysis")
-
-        chart_data = pd.DataFrame({
-            "Event Type": ["Normal", "Anomaly"],
-            "Count": [normal, anomalies]
-        })
-
-        st.bar_chart(
-            chart_data,
-            x="Event Type",
-            y="Count"
-        )
-
-        st.markdown("### Tenant Activity")
-
-        tenant_data = df.groupby(
-            "user_tenant"
-        ).size().reset_index(name="Events")
-
-        st.bar_chart(
-            tenant_data,
-            x="user_tenant",
-            y="Events"
-        )
-
-        st.markdown("### Security Audit Logs")
-        st.dataframe(df, use_container_width=True)
-
-        st.markdown("### Suspicious Activities")
-
-        suspicious = df[
-            df["security_action"] == "BLOCK"
-        ]
-
-        st.dataframe(
-            suspicious,
-            use_container_width=True
-        )
-
-        st.download_button(
-            "Download Security Report",
-            df.to_csv(index=False),
-            "security_report.csv",
-            "text/csv"
-        )
-
-    else:
-        st.error("CSV does not contain required columns.")
-
-else:
-    st.warning("Please upload your audit log CSV file.")
-
-# ==========================================
-# PHASE 2: ROLE-BASED ACCESS CONTROL DASHBOARD
-# ==========================================
-
-st.divider()
-st.header("Phase 2: Multi-Tenant Access Control")
-
-st.write(
-    "Upload the Phase 2 security report generated "
-    "from Google Colab."
-)
-
-phase2_file = st.file_uploader(
-    "Upload Phase 2 Security Report",
-    type=["csv"],
-    key="phase2_upload"
-)
-
-if phase2_file is not None:
-
-    phase2_df = pd.read_csv(phase2_file)
-
-    required_columns = [
-        "tenant_id",
-        "resource_tenant",
-        "user_role",
-        "action",
-        "security_decision",
-        "reason"
-    ]
-
-    missing_columns = [
-        col for col in required_columns
-        if col not in phase2_df.columns
-    ]
-
-    if missing_columns:
-        st.error(f"Missing columns: {missing_columns}")
-
-    else:
-        phase2_df["security_decision"] = (
-            phase2_df["security_decision"]
-            .astype(str).str.strip().str.upper()
-        )
-
-        # Security metrics
-        total = len(phase2_df)
-
-        allowed = (
-            phase2_df["security_decision"] == "ALLOW"
-        ).sum()
-
-        blocked = (
-            phase2_df["security_decision"] == "BLOCK"
-        ).sum()
-
-        st.subheader("Access Control Summary")
-
-        col1, col2, col3 = st.columns(3)
-
-        col1.metric("Total Requests", total)
-        col2.metric("Allowed", allowed)
-        col3.metric("Blocked", blocked)
-
-        # Tenant filter
-        st.subheader("Tenant-wise Monitoring")
-
-        tenants = ["All Tenants"] + sorted(
-            phase2_df["tenant_id"].dropna().unique().tolist()
-        )
-
-        selected_tenant = st.selectbox(
-            "Select Tenant",
-            tenants,
-            key="phase2_tenant_filter"
-        )
-
-        if selected_tenant == "All Tenants":
-            filtered_df = phase2_df.copy()
-        else:
-            filtered_df = phase2_df[
-                phase2_df["tenant_id"] == selected_tenant
-            ]
-
-        st.subheader("Access Request Records")
-        st.dataframe(filtered_df, use_container_width=True)
-
-        # Security alerts
-        st.subheader("Security Alerts")
-
-        alerts = filtered_df[
-            filtered_df["security_decision"] == "BLOCK"
-        ]
-
-        if not alerts.empty:
-            st.warning(f"{len(alerts)} blocked requests detected.")
-            st.dataframe(
-                alerts,
-                use_container_width=True
+        if missing_columns:
+            st.error(
+                "Missing columns: "
+                + ", ".join(sorted(missing_columns))
             )
         else:
-            st.success("No blocked requests in this selection.")
+            # Never show another tenant's dashboard records.
+            audit_df = filter_tenant_data(
+                audit_df,
+                "user_tenant",
+                user_tenant,
+            )
 
-        # Download report
-        csv_data = phase2_df.to_csv(index=False).encode("utf-8")
+            if audit_df.empty:
+                st.warning(
+                    "No audit records were found for your tenant."
+                )
+            else:
+                total_records = len(audit_df)
 
-        st.download_button(
-            label="Download Phase 2 Security Report",
-            data=csv_data,
-            file_name="phase2_security_report.csv",
-            mime="text/csv",
-            key="phase2_download"
-        )
+                anomaly_count = (
+                    audit_df["anomaly_status"]
+                    .astype(str)
+                    .str.upper()
+                    .eq("ANOMALY")
+                    .sum()
+                )
 
-        st.success("Phase 2 report processed successfully!")
-# ==========================================
-# PHASE 3: LSTM ANOMALY DETECTION
-# ==========================================
+                blocked_count = (
+                    audit_df["security_action"]
+                    .astype(str)
+                    .str.upper()
+                    .eq("BLOCK")
+                    .sum()
+                )
+
+                col1, col2, col3 = st.columns(3)
+
+                col1.metric("Total Events", total_records)
+                col2.metric("Anomalies", int(anomaly_count))
+                col3.metric("Blocked Events", int(blocked_count))
+
+                st.subheader("Audit Log Records")
+                st.dataframe(
+                    audit_df,
+                    use_container_width=True,
+                )
+
+                suspicious_df = audit_df[
+                    audit_df["security_action"]
+                    .astype(str)
+                    .str.upper()
+                    .eq("BLOCK")
+                ]
+
+                st.subheader("🚨 Suspicious Events")
+                st.dataframe(
+                    suspicious_df,
+                    use_container_width=True,
+                )
+
+                display_csv_download(
+                    audit_df,
+                    "tenant_audit_report.csv",
+                    "Download Tenant Audit Report",
+                )
+
+    except Exception as error:
+        st.error("Unable to process the uploaded audit log.")
+        st.caption(str(error))
+
 
 st.divider()
-st.header("Phase 3: LSTM-Based Anomaly Detection")
+
+
+# --------------------------------------------------
+# 7. LSTM ANOMALY DETECTION
+# --------------------------------------------------
+
+st.header("🤖 LSTM Anomaly Detection")
 
 st.write(
-    "Upload a cloud audit log CSV containing "
-    "10 events per sequence for LSTM prediction."
+    "Upload sequential audit logs to identify unusual activity "
+    "using the trained LSTM model."
 )
 
+
 @st.cache_resource
-def load_lstm_components():
-    model = tf.keras.models.load_model(
-        "cloud_anomaly_lstm.keras"
-    )
+def load_lstm_assets():
+    """Load the trained model, scaler and feature configuration."""
 
-    scaler = joblib.load("lstm_scaler.pkl")
+    if not all(
+        path.exists()
+        for path in (MODEL_PATH, SCALER_PATH, CONFIG_PATH)
+    ):
+        raise FileNotFoundError(
+            "One or more LSTM model files are missing."
+        )
 
-    config = joblib.load("lstm_feature_config.pkl")
+    model = tf.keras.models.load_model(MODEL_PATH)
+    scaler = joblib.load(SCALER_PATH)
+    config = joblib.load(CONFIG_PATH)
 
-    return model, scaler, config
+    features = config["features"]
+    sequence_length = int(config["sequence_length"])
+
+    return model, scaler, features, sequence_length
 
 
-try:
-    lstm_model, lstm_scaler, lstm_config = (
-        load_lstm_components()
-    )
+lstm_file = st.file_uploader(
+    "Upload LSTM Audit Log CSV",
+    type=["csv"],
+    key="lstm_csv",
+)
 
-    st.success("LSTM model loaded successfully!")
-
-    lstm_file = st.file_uploader(
-        "Upload LSTM Audit Dataset",
-        type=["csv"],
-        key="lstm_upload"
-    )
-
-    if lstm_file is not None:
+if lstm_file is not None:
+    try:
+        model, scaler, features, sequence_length = load_lstm_assets()
 
         lstm_df = pd.read_csv(lstm_file)
 
-        features = lstm_config["features"]
-        sequence_length = lstm_config["sequence_length"]
+        required_columns = {"sequence_id", *features}
+        missing_columns = required_columns - set(lstm_df.columns)
 
-        required = ["sequence_id"] + features
-
-        missing = [
-            col for col in required
-            if col not in lstm_df.columns
-        ]
-
-        if missing:
+        if missing_columns:
             st.error(
-                f"Missing required columns: {missing}"
+                "Missing LSTM columns: "
+                + ", ".join(sorted(missing_columns))
             )
 
         else:
+            # If tenant metadata exists, enforce tenant filtering.
+            tenant_column = None
 
-            if "timestamp" in lstm_df.columns:
-                lstm_df = lstm_df.sort_values(
-                    ["sequence_id", "timestamp"]
+            if "user_tenant" in lstm_df.columns:
+                tenant_column = "user_tenant"
+            elif "tenant_id" in lstm_df.columns:
+                tenant_column = "tenant_id"
+
+            if tenant_column:
+                lstm_df = filter_tenant_data(
+                    lstm_df,
+                    tenant_column,
+                    user_tenant,
+                )
+            else:
+                st.warning(
+                    "This CSV has no tenant column. It will be "
+                    "treated as a pre-filtered tenant-specific file. "
+                    "Its tenant ownership cannot be verified."
                 )
 
-            valid_sequences = []
-            valid_sequence_ids = []
+            if "timestamp" in lstm_df.columns:
+                lstm_df = lstm_df.sort_values("timestamp")
 
-            for sequence_id, group in lstm_df.groupby("sequence_id", sort=True):
-                if len(group) != sequence_length:
-                    continue
-                    sequence = group[features].to_numpy(dtype=np.float32)
-                    
             valid_sequences = []
             valid_sequence_ids = []
 
             for sequence_id, group in lstm_df.groupby(
-                "sequence_id", sort=True
+                "sequence_id",
+                sort=True,
             ):
                 if len(group) != sequence_length:
                     continue
 
-                sequence = group[features].to_numpy(
-                    dtype=np.float32
+                try:
+                    sequence = group[features].apply(
+                        pd.to_numeric,
+                        errors="coerce",
+                    ).to_numpy(dtype=np.float32)
+
+                    if not np.isfinite(sequence).all():
+                        continue
+
+                    valid_sequences.append(sequence)
+                    valid_sequence_ids.append(sequence_id)
+
+                except (TypeError, ValueError):
+                    continue
+
+            if not valid_sequences:
+                st.warning(
+                    "No valid sequences were found. Each sequence "
+                    f"must contain exactly {sequence_length} valid rows."
                 )
-
-                valid_sequences.append(sequence)
-                valid_sequence_ids.append(sequence_id)
-
-            predictions = []
-
-            if valid_sequences:
-                batch = np.stack(valid_sequences)
-
-                original_shape = batch.shape
-                batch_2d = batch.reshape(-1, len(features))
-
-                batch_scaled = lstm_scaler.transform(batch_2d)
-                batch_scaled = batch_scaled.reshape(original_shape)
-
-                probabilities = lstm_model.predict(
-                    batch_scaled,
-                    verbose=0,
-                    batch_size=32
-                ).reshape(-1)
-
-                for sequence_id, probability in zip(
-                    valid_sequence_ids, probabilities
-                ):
-                    status = (
-                        "ANOMALY"
-                        if probability >= 0.5
-                        else "NORMAL"
-                    )
-
-                    predictions.append({
-                        "Sequence ID": sequence_id,
-                        "Anomaly Probability": round(
-                            float(probability) * 100, 2
-                        ),
-                        "Prediction": status
-                    })
-
-
-            if predictions:
-
-                result_df = pd.DataFrame(predictions)
-                # Store actual LSTM predictions for Phase 4
-                st.session_state["lstm_results"] = result_df.copy()
-
-                total_sequences = len(result_df)
-
-                anomaly_count = (
-                    result_df["Prediction"] == "ANOMALY"
-                ).sum()
-
-                normal_count = (
-                    result_df["Prediction"] == "NORMAL"
-                ).sum()
-
-                st.subheader("LSTM Prediction Summary")
-
-                col1, col2, col3 = st.columns(3)
-
-                col1.metric(
-                    "Total Sequences",
-                    total_sequences
-                )
-
-                col2.metric(
-                    "Normal Sequences",
-                    int(normal_count)
-                )
-
-                col3.metric(
-                    "Anomalous Sequences",
-                    int(anomaly_count)
-                )
-
-                st.subheader("Prediction Chart")
-
-                chart_df = pd.DataFrame({
-                    "Status": ["Normal", "Anomaly"],
-                    "Count": [
-                        int(normal_count),
-                        int(anomaly_count)
-                    ]
-                })
-
-                st.bar_chart(
-                    chart_df,
-                    x="Status",
-                    y="Count"
-                )
-
-                st.subheader("LSTM Prediction Results")
-
-                st.dataframe(
-                    result_df,
-                    use_container_width=True
-                )
-
-                suspicious = result_df[
-                    result_df["Prediction"] == "ANOMALY"
-                ]
-
-                if not suspicious.empty:
-                    st.warning(
-                        f"{len(suspicious)} suspicious "
-                        "sequences detected by LSTM."
-                    )
-                    st.dataframe(
-                        suspicious,
-                        use_container_width=True
-                    )
-                else:
-                    st.success(
-                        "No anomalous sequences detected."
-                    )
-
-                st.download_button(
-                    "Download LSTM Prediction Report",
-                    result_df.to_csv(
-                        index=False
-                    ).encode("utf-8"),
-                    "lstm_prediction_report.csv",
-                    "text/csv",
-                    key="lstm_download"
-                )
+                st.session_state.pop("lstm_results", None)
 
             else:
-                st.error(
-                    "No valid sequences found. "
-                    "Each sequence must contain exactly "
-                    f"{sequence_length} events."
+                sequences = np.asarray(
+                    valid_sequences,
+                    dtype=np.float32,
                 )
 
-except Exception as e:
-    st.error(
-        f"Could not load the LSTM model: {e}"
-    )
-# ==========================================
-# PHASE 4: INTEGRATED DETECTION & PREVENTION
-# ==========================================
+                original_shape = sequences.shape
+
+                scaled_sequences = scaler.transform(
+                    sequences.reshape(-1, len(features))
+                )
+
+                scaled_sequences = scaled_sequences.reshape(
+                    original_shape
+                )
+
+                predictions = model.predict(
+                    scaled_sequences,
+                    verbose=0,
+                )
+
+                scores = np.asarray(predictions).reshape(-1)
+
+                results = pd.DataFrame({
+                    "sequence_id": valid_sequence_ids,
+                    "anomaly_score": scores,
+                })
+
+                results["status"] = np.where(
+                    results["anomaly_score"] >= LSTM_THRESHOLD,
+                    "ANOMALY",
+                    "NORMAL",
+                )
+
+                st.session_state["lstm_results"] = results
+
+                st.success(
+                    f"Processed {len(results)} valid sequences."
+                )
+
+                st.dataframe(
+                    results,
+                    use_container_width=True,
+                )
+
+                anomaly_total = int(
+                    results["status"].eq("ANOMALY").sum()
+                )
+
+                normal_total = int(
+                    results["status"].eq("NORMAL").sum()
+                )
+
+                col1, col2 = st.columns(2)
+                col1.metric("Normal Sequences", normal_total)
+                col2.metric("Anomalous Sequences", anomaly_total)
+
+                display_csv_download(
+                    results,
+                    "lstm_prediction_results.csv",
+                    "Download LSTM Results",
+                )
+
+    except FileNotFoundError as error:
+        st.error(str(error))
+
+    except Exception as error:
+        st.error("LSTM processing failed.")
+        st.caption(str(error))
+
 
 st.divider()
-st.header("Phase 4: Integrated Security Decision")
+
+
+# --------------------------------------------------
+# 8. INTEGRATED SECURITY DECISION
+# --------------------------------------------------
+
+st.header("🛡️ Integrated Security Decision")
 
 st.write(
-    "Combines LSTM anomaly detection with "
-    "Role-Based Access Control (RBAC)."
+    "The security engine combines tenant isolation, role-based "
+    "permissions and LSTM anomaly detection."
 )
 
-st.info(
-    "This is a simulated security enforcement workflow."
+st.text_input(
+    "Authenticated User Tenant",
+    value=user_tenant,
+    disabled=True,
 )
 
-# Role permissions
-role_permissions = {
-    "Admin": ["READ", "WRITE", "DELETE"],
-    "Developer": ["READ", "WRITE"],
-    "Viewer": ["READ"]
-}
+st.text_input(
+    "Authenticated User Role",
+    value=user_role,
+    disabled=True,
+)
 
-st.subheader("Test an Access Request")
+resource_tenant = st.selectbox(
+    "Select Resource Tenant",
+    TENANTS,
+)
 
-col1, col2 = st.columns(2)
+action = st.selectbox(
+    "Select Requested Action",
+    ["READ", "WRITE", "DELETE"],
+)
 
-with col1:
-    st.text_input(
-        "Authenticated User Tenant",
-        value=user_tenant,
-        disabled=True
-    )
-
-    st.text_input(
-        "Authenticated User Role",
-        value=user_role,
-        disabled=True
-    )
-
-with col2:
-    resource_tenant = st.selectbox(
-        "Resource Tenant",
-        ["Tenant_A", "Tenant_B"],
-        key="integrated_resource_tenant"
-    )
-
-    action = st.selectbox(
-        "Requested Action",
-        ["READ", "WRITE", "DELETE"],
-        key="integrated_action"
-    )
-
-# Select LSTM result
- # Select an actual LSTM prediction
 lstm_results = st.session_state.get("lstm_results")
 
 if lstm_results is not None and not lstm_results.empty:
-
-    sequence_options = (
-        lstm_results["Sequence ID"].tolist()
-    )
+    sequence_options = lstm_results["sequence_id"].tolist()
 
     selected_sequence = st.selectbox(
         "Select LSTM Sequence",
-        sequence_options
+        sequence_options,
     )
 
     selected_result = lstm_results[
-        lstm_results["Sequence ID"] == selected_sequence
-    ].iloc[0]
+        lstm_results["sequence_id"] == selected_sequence
+    ]
 
-    lstm_status = selected_result["Prediction"]
-
-    st.info(
-        f"Actual LSTM Prediction: {lstm_status}"
-    )
+    lstm_status = selected_result.iloc[0]["status"]
 
 else:
+    st.warning(
+        "No LSTM prediction is currently available. "
+        "The security engine will fail safely and BLOCK the request."
+    )
     lstm_status = "UNAVAILABLE"
 
-    st.warning(
-        "LSTM prediction unavailable. "
-        "Upload an LSTM dataset before making "
-        "a security decision."
+
+if st.button(
+    "Run Integrated Security Check",
+    use_container_width=True,
+):
+    final_decision, reasons = make_security_decision(
+        user_tenant=user_tenant,
+        resource_tenant=resource_tenant,
+        user_role=user_role,
+        action=action,
+        lstm_status=lstm_status,
     )
 
-if st.button("Run Integrated Security Check"):
-    if user_tenant != resource_tenant:
-        final_decision = "BLOCK"
-        reasons = ["Cross-Tenant Access Attempt"]
-
+    if final_decision == "ALLOW":
+        st.success("✅ ACCESS ALLOWED")
     else:
-        final_decision, reasons = make_security_decision(
-            user_tenant,
-            resource_tenant,
-            user_role,
-            action,
-            lstm_status
-        )
+        st.error("🚨 ACCESS BLOCKED")
 
-    # Display the security decision
-    if final_decision == "BLOCK":
-        st.error("ACCESS BLOCKED")
-    else:
-        st.success("ACCESS ALLOWED")
-
-    st.subheader("Security Decision Report")
-
-    st.write("User Tenant:", user_tenant)
-    st.write("Resource Tenant:", resource_tenant)
-    st.write("User Role:", user_role)
-    st.write("Requested Action:", action)
-    st.write("LSTM Status:", lstm_status)
-    st.write("Final Decision:", final_decision)
+    st.write(f"**LSTM Status:** {lstm_status}")
+    st.write(f"**Final Decision:** {final_decision}")
 
     if reasons:
-        st.write("Security Reasons:")
+        st.subheader("Security Reasons")
+
         for reason in reasons:
-            st.write("- ", reason)
+            st.warning(reason)
     else:
-        st.write("Reason: Authorized access and normal activity.")
+        st.info("All security checks passed.")
 
-    # Save the security decision to Firebase
+    audit_record = {
+        "user_uid": user_uid,
+        "user_email": user_email,
+        "user_tenant": user_tenant,
+        "resource_tenant": resource_tenant,
+        "user_role": user_role,
+        "action": action,
+        "lstm_status": lstm_status,
+        "decision": final_decision,
+        "reasons": reasons,
+        "timestamp": firestore.SERVER_TIMESTAMP,
+    }
+
     try:
-        audit_record = {
-            "user_tenant": user_tenant,
-            "resource_tenant": resource_tenant,
-            "user_role": user_role,
-            "action": action,
-            "lstm_status": lstm_status,
-            "decision": final_decision,
-            "reasons": reasons,
-            "timestamp": firestore.SERVER_TIMESTAMP
-        }
-
         db.collection("audit_logs").add(audit_record)
+        st.success("Security event saved to Firestore.")
 
-        st.success("Security event saved to Firebase Firestore!")
+    except Exception:
+        st.error("The security event could not be saved to Firestore.")
 
-    except Exception as e:
-        st.error(f"Firebase logging failed: {e}")
-
-# PHASE 11: FINAL VALIDATION REPORT
-
-st.header("Phase 11: Final Security Validation")
-
-validation_data = [
-    ["TC01", "Normal + Authorized Access", "ALLOW", "ALLOW", "PASS"],
-    ["TC02", "LSTM Anomaly Detected", "BLOCK", "BLOCK", "PASS"],
-    ["TC03", "Cross-Tenant Access", "BLOCK", "BLOCK", "PASS"],
-    ["TC04", "Insufficient Role Permission", "BLOCK", "BLOCK", "PASS"],
-    ["TC05", "LSTM Prediction Unavailable", "BLOCK", "BLOCK", "PASS"]
-]
-
-validation_df = pd.DataFrame(
-    validation_data,
-    columns=[
-        "Test ID",
-        "Test Scenario",
-        "Expected Result",
-        "Actual Result",
-        "Status"
-    ]
-)
-
-st.dataframe(validation_df, use_container_width=True)
-
-st.metric("Total Test Cases", len(validation_df))
-st.metric(
-    "Passed Test Cases",
-    len(validation_df[validation_df["Status"] == "PASS"])
-)
-
-csv_data = validation_df.to_csv(index=False)
-
-st.download_button(
-    "Download Validation Report",
-    data=csv_data,
-    file_name="final_validation_report.csv",
-    mime="text/csv"
-)
-
-# ==========================================
-# PHASE 12: FIREBASE CLOUD AUDIT LOG VIEWER
-# ==========================================
 
 st.divider()
-st.header("Phase 12: Firebase Cloud Audit Logs")
 
-st.write(
-    "View security events stored in Firebase Firestore."
+
+# --------------------------------------------------
+# 9. SECURITY TEST SCENARIOS
+# --------------------------------------------------
+
+st.header("🧪 Security Test Scenarios")
+
+st.caption(
+    "These are expected test scenarios, not live test results. "
+    "Actual test outcomes are determined by the automated test suite."
 )
 
-if st.button("Load Firebase Audit Logs"):
+test_scenarios = pd.DataFrame([
+    {
+        "Scenario": "Same-tenant READ with Admin",
+        "Expected Decision": "ALLOW",
+        "Expected Reason": "No security violation",
+    },
+    {
+        "Scenario": "Cross-tenant access",
+        "Expected Decision": "BLOCK",
+        "Expected Reason": "Cross-Tenant Access Attempt",
+    },
+    {
+        "Scenario": "Viewer requests WRITE",
+        "Expected Decision": "BLOCK",
+        "Expected Reason": "Insufficient Role Permission",
+    },
+    {
+        "Scenario": "LSTM detects anomaly",
+        "Expected Decision": "BLOCK",
+        "Expected Reason": "LSTM Detected Suspicious Activity",
+    },
+    {
+        "Scenario": "LSTM prediction unavailable",
+        "Expected Decision": "BLOCK",
+        "Expected Reason": "LSTM Prediction Unavailable",
+    },
+])
 
-    try:
-        documents = (
-    db.collection("audit_logs")
-    .where("user_tenant", "==", user_tenant)
-    .order_by(
-        "timestamp",
-        direction=firestore.Query.DESCENDING
+st.dataframe(
+    test_scenarios,
+    use_container_width=True,
+    hide_index=True,
+)
+
+
+st.divider()
+
+
+# --------------------------------------------------
+# 10. FIRESTORE AUDIT LOG VIEWER
+# --------------------------------------------------
+
+st.header("📁 Firestore Security Audit Logs")
+
+st.write(
+    f"Showing security events belonging to **{user_tenant}** only."
+)
+
+if st.button(
+    "Refresh Audit Logs",
+    use_container_width=True,
+):
+    st.session_state["refresh_audit_logs"] = True
+
+
+try:
+    audit_documents = (
+        db.collection("audit_logs")
+        .where("user_tenant", "==", user_tenant)
+        .order_by(
+            "timestamp",
+            direction=firestore.Query.DESCENDING,
+        )
+        .limit(100)
+        .stream()
     )
-    .limit(100)
-    .stream())
+
+    firestore_records = []
+
+    for document in audit_documents:
+        record = document.to_dict()
+        record["document_id"] = document.id
+        firestore_records.append(record)
+
+    if firestore_records:
+        firestore_df = pd.DataFrame(firestore_records)
+
+        total_events = len(firestore_df)
+
+        allowed_events = (
+            firestore_df["decision"]
+            .astype(str)
+            .str.upper()
+            .eq("ALLOW")
+            .sum()
+        )
+
+        blocked_events = (
+            firestore_df["decision"]
+            .astype(str)
+            .str.upper()
+            .eq("BLOCK")
+            .sum()
+        )
+
+        col1, col2, col3 = st.columns(3)
+
+        col1.metric("Total Events", total_events)
+        col2.metric("Allowed", int(allowed_events))
+        col3.metric("Blocked", int(blocked_events))
+
+        st.dataframe(
+            firestore_df,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        display_csv_download(
+            firestore_df,
+            "firestore_tenant_audit_logs.csv",
+            "Download Firestore Audit Logs",
+        )
+
+    else:
+        st.info("No audit logs found for this tenant.")
+
+except Exception as error:
+    st.error("Unable to retrieve Firestore audit logs.")
+    st.caption(
+        "If Firestore reports a missing index, follow the "
+        "index creation link in the error message."
+    )
+    st.caption(str(error))
 
 
-        audit_records = []
-
-        for document in documents:
-            record = document.to_dict()
-            record["Document ID"] = document.id
-            audit_records.append(record)
-
-        if audit_records:
-
-            audit_df = pd.DataFrame(audit_records)
-
-            st.success(
-                f"Loaded {len(audit_df)} Firebase audit events."
-            )
-
-            total = len(audit_df)
-            allowed = (
-                audit_df["decision"] == "ALLOW"
-            ).sum()
-            blocked = (
-                audit_df["decision"] == "BLOCK"
-            ).sum()
-
-            col1, col2, col3 = st.columns(3)
-
-            col1.metric("Total Events", total)
-            col2.metric("Allowed", int(allowed))
-            col3.metric("Blocked", int(blocked))
-
-            st.subheader("Cloud Security Event Records")
-
-            st.dataframe(
-                audit_df,
-                use_container_width=True
-            )
-
-            st.download_button(
-                "Download Firebase Audit Report",
-                audit_df.to_csv(index=False).encode("utf-8"),
-                "firebase_audit_logs.csv",
-                "text/csv",
-                key="firebase_audit_download"
-            )
-
-        else:
-            st.info("No Firebase audit records found.")
-
-    except Exception as e:
-        st.error(f"Could not load Firebase logs: {e}")
+st.caption(
+    "Multi-Tenant Cloud Data Isolation and Leakage Prevention "
+    "using Cloud Audit Log Analysis."
+                                           )
