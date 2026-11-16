@@ -41,7 +41,7 @@ def make_security_decision(
         and resource_tenant in VALID_TENANTS
         and user_tenant != resource_tenant
     ):
-        reasons.append("Cross-Tenant Access Attempt")
+        reasons.append("Cross-Tenant Access")
 
     # 3. Check role-based permissions.
     allowed_actions = ROLE_PERMISSIONS.get(user_role)
