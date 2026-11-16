@@ -159,7 +159,7 @@ if st.sidebar.button("Logout"):
     st.session_state["user_profile"] = None
     st.rerun()
 
-st.title("🔐 Multi-Tenant Cloud Security")
+st.title(" Multi-Tenant Cloud Security")
 st.subheader("Anomaly Detection and Data Leakage Prevention")
 
 st.info("Upload your cloud audit log CSV report.")
@@ -614,16 +614,16 @@ st.subheader("Test an Access Request")
 col1, col2 = st.columns(2)
 
 with col1:
-    user_tenant = st.selectbox(
-        "User Tenant",
-        ["Tenant_A", "Tenant_B"],
-        key="integrated_user_tenant"
+    st.text_input(
+        "Authenticated User Tenant",
+        value=user_tenant,
+        disabled=True
     )
 
-    user_role = st.selectbox(
-        "User Role",
-        ["Admin", "Developer", "Viewer"],
-        key="integrated_user_role"
+    st.text_input(
+        "Authenticated User Role",
+        value=user_role,
+        disabled=True
     )
 
 with col2:
