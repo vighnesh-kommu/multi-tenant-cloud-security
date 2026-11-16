@@ -83,6 +83,82 @@ def get_authenticated_profile(id_token):
         "role": role
     }
 
+# Check whether a user is logged in
+if "firebase_id_token" not in st.session_state:
+    st.session_state["firebase_id_token"] = None
+
+if "user_profile" not in st.session_state:
+    st.session_state["user_profile"] = None
+
+
+# Display the login page
+if not st.session_state["firebase_id_token"]:
+
+    st.title("🔐 Multi-Tenant Cloud Security")
+    st.subheader("Firebase Login")
+
+    with st.form("firebase_login_form"):
+        email = st.text_input("Email")
+        password = st.text_input(
+            "Password",
+            type="password"
+        )
+
+        login_button = st.form_submit_button("Login")
+
+    if login_button:
+        try:
+            token = firebase_login(email, password)
+            profile = get_authenticated_profile(token)
+
+            st.session_state["firebase_id_token"] = token
+            st.session_state["user_profile"] = profile
+
+            st.rerun()
+
+        except Exception as e:
+            st.error(f"Login failed: {e}")
+
+    st.stop()
+
+
+# Verify the logged-in user's profile
+try:
+    profile = get_authenticated_profile(
+        st.session_state["firebase_id_token"]
+    )
+
+    st.session_state["user_profile"] = profile
+
+except Exception:
+    st.session_state["firebase_id_token"] = None
+    st.session_state["user_profile"] = None
+
+    st.error("Session expired. Please log in again.")
+    st.stop()
+
+
+# Get tenant and role from Firebase
+profile = st.session_state["user_profile"]
+
+user_tenant = profile["tenant_id"]
+user_role = profile["role"]
+
+
+# Display logged-in account
+st.sidebar.success(
+    f"Logged in: {profile.get('email')}\n"
+    f"Tenant: {user_tenant}\n"
+    f"Role: {user_role}"
+)
+
+
+# Logout
+if st.sidebar.button("Logout"):
+    st.session_state["firebase_id_token"] = None
+    st.session_state["user_profile"] = None
+    st.rerun()
+
 st.title("🔐 Multi-Tenant Cloud Security")
 st.subheader("Anomaly Detection and Data Leakage Prevention")
 
