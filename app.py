@@ -783,14 +783,15 @@ if st.button("Load Firebase Audit Logs"):
 
     try:
         documents = (
-            db.collection("audit_logs")
-            .order_by(
-                "timestamp",
-                direction=firestore.Query.DESCENDING
-            )
-            .limit(100)
-            .stream()
-        )
+    db.collection("audit_logs")
+    .where("user_tenant", "==", user_tenant)
+    .order_by(
+        "timestamp",
+        direction=firestore.Query.DESCENDING
+    )
+    .limit(100)
+    .stream())
+
 
         audit_records = []
 
