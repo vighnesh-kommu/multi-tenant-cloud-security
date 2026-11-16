@@ -1,6 +1,7 @@
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials, firestore, auth
 import streamlit as st
+import requests
 import pandas as pd
 import numpy as np
 import joblib
