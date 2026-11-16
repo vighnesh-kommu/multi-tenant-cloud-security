@@ -27,6 +27,62 @@ def initialize_firebase():
 
 
 db = initialize_firebase()
+
+def firebase_login(email, password):
+    api_key = st.secrets["firebase_web"]["api_key"]
+
+    url = (
+        "https://identitytoolkit.googleapis.com/v1/"
+        f"accounts:signInWithPassword?key={api_key}"
+    )
+
+    response = requests.post(
+        url,
+        json={
+            "email": email,
+            "password": password,
+            "returnSecureToken": True
+        },
+        timeout=15
+    )
+
+    if response.status_code != 200:
+        error_data = response.json()
+        message = error_data.get("error", {}).get(
+            "message", "Login failed"
+        )
+        raise ValueError(message)
+
+    return response.json()["idToken"]
+
+
+def get_authenticated_profile(id_token):
+    decoded_token = auth.verify_id_token(id_token)
+    uid = decoded_token["uid"]
+
+    user_doc = db.collection("user_tenants").document(uid).get()
+
+    if not user_doc.exists:
+        raise ValueError("No tenant mapping found for this user.")
+
+    profile = user_doc.to_dict()
+
+    tenant_id = profile.get("tenant_id")
+    role = profile.get("role")
+
+    if tenant_id not in ["Tenant_A", "Tenant_B"]:
+        raise ValueError("Invalid tenant mapping.")
+
+    if role not in ["Admin", "Developer", "Viewer"]:
+        raise ValueError("Invalid user role.")
+
+    return {
+        "uid": uid,
+        "email": decoded_token.get("email"),
+        "tenant_id": tenant_id,
+        "role": role
+    }
+
 st.title("🔐 Multi-Tenant Cloud Security")
 st.subheader("Anomaly Detection and Data Leakage Prevention")
 
