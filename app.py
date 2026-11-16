@@ -674,17 +674,22 @@ else:
     )
 
 if st.button("Run Integrated Security Check"):
+
+    # Check tenant isolation first
     if user_tenant != resource_tenant:
         final_decision = "BLOCK"
         reasons = ["Cross-Tenant Access Attempt"]
-    else:
-    final_decision, reasons = make_security_decision(
-        user_tenant,
-        resource_tenant,
-        user_role,
-        action,
-        lstm_status)
 
+    else:
+        final_decision, reasons = make_security_decision(
+            user_tenant,
+            resource_tenant,
+            user_role,
+            action,
+            lstm_status
+        )
+
+    # Display the security decision
     if final_decision == "BLOCK":
         st.error("ACCESS BLOCKED")
     else:
@@ -705,7 +710,8 @@ if st.button("Run Integrated Security Check"):
             st.write("- ", reason)
     else:
         st.write("Reason: Authorized access and normal activity.")
-            # Save security decision to Firebase Firestore
+
+    # Save the security decision to Firebase
     try:
         audit_record = {
             "user_tenant": user_tenant,
@@ -724,6 +730,7 @@ if st.button("Run Integrated Security Check"):
 
     except Exception as e:
         st.error(f"Firebase logging failed: {e}")
+
 # PHASE 11: FINAL VALIDATION REPORT
 
 st.header("Phase 11: Final Security Validation")
