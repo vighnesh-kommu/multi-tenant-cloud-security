@@ -674,20 +674,16 @@ else:
     )
 
 if st.button("Run Integrated Security Check"):
-    # Check tenant isolation before other security checks
-if user_tenant != resource_tenant:
-
-    final_decision = "BLOCK"
-    reasons = ["Cross-Tenant Access Attempt"]
-
-else:
+    if user_tenant != resource_tenant:
+        final_decision = "BLOCK"
+        reasons = ["Cross-Tenant Access Attempt"]
+    else:
     final_decision, reasons = make_security_decision(
         user_tenant,
         resource_tenant,
         user_role,
         action,
-        lstm_status
-    )
+        lstm_status)
 
     if final_decision == "BLOCK":
         st.error("ACCESS BLOCKED")
