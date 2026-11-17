@@ -1,1 +1,194 @@
 
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cloud Security Monitor | Dashboard</title>
+
+<style>
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 25px 16px;
+  min-height: 100vh;
+  background: #08111f;
+  color: #e8eef8;
+  font-family: Arial, sans-serif;
+}
+
+.container {
+  max-width: 850px;
+  margin: 30px auto;
+  padding: 25px;
+  background: #111d30;
+  border: 1px solid #263955;
+  border-radius: 16px;
+}
+
+h1 { font-size: 25px; }
+h2 { font-size: 18px; color: #b9d6f8; }
+
+p { color: #9aabc3; line-height: 1.6; }
+
+.info, #result {
+  padding: 16px;
+  margin-top: 16px;
+  background: #0a1526;
+  border: 1px solid #30445f;
+  border-radius: 10px;
+  overflow-wrap: anywhere;
+}
+
+button {
+  padding: 13px 18px;
+  border: 0;
+  border-radius: 8px;
+  background: #1677e8;
+  color: white;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+#logoutBtn { background: #344762; }
+
+pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: #b9d6f8;
+  font-size: 13px;
+}
+
+.status { color: #50d69a; font-weight: bold; }
+</style>
+</head>
+
+<body>
+<div class="container">
+  <h1>🔐 Cloud Security Monitor</h1>
+  <p>Multi-Tenant Cloud Security Dashboard</p>
+
+  <div class="info">
+    <h2>Account Information</h2>
+    <p id="email">Checking login...</p>
+    <p id="tenant">Loading tenant...</p>
+    <p id="role">Loading role...</p>
+    <p id="status">Checking security...</p>
+  </div>
+
+  <h2>My Tenant Data</h2>
+  <p>Only documents belonging to your authenticated tenant are requested.</p>
+
+  <button id="loadBtn" disabled>Load My Tenant Data</button>
+  <button id="logoutBtn">Logout</button>
+
+  <div id="result">Waiting for authentication...</div>
+</div>
+
+<script type="module">
+import { initializeApp } from
+"https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+
+import { getAuth, onAuthStateChanged, signOut } from
+"https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+
+import {
+  getFirestore, doc, getDoc, collection, getDocs
+} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+
+// IMPORTANT: Copy the exact firebaseConfig object
+// from your existing firebase_test.html file.
+const firebaseConfig = {
+  // Paste your existing Firebase configuration here.
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+const emailEl = document.getElementById("email");
+const tenantEl = document.getElementById("tenant");
+const roleEl = document.getElementById("role");
+const statusEl = document.getElementById("status");
+const resultEl = document.getElementById("result");
+const loadBtn = document.getElementById("loadBtn");
+
+let currentTenant = null;
+
+onAuthStateChanged(auth, async (user) => {
+  if (!user) {
+    window.location.replace("index.html");
+    return;
+  }
+
+  try {
+    emailEl.textContent = "Email: " + user.email;
+
+    const profileRef = doc(db, "user_tenants", user.uid);
+    const profileSnap = await getDoc(profileRef);
+
+    if (!profileSnap.exists()) {
+      throw new Error("No tenant mapping found for this account.");
+    }
+
+    const profile = profileSnap.data();
+
+    if (!["Tenant_A", "Tenant_B"].includes(profile.tenant_id)) {
+      throw new Error("Invalid tenant assignment.");
+    }
+
+    currentTenant = profile.tenant_id;
+
+    tenantEl.textContent = "Tenant: " + currentTenant;
+    roleEl.textContent = "Role: " + profile.role;
+    statusEl.textContent = "● Authenticated";
+    statusEl.className = "status";
+
+    loadBtn.disabled = false;
+    resultEl.textContent = "Authentication successful. Load your tenant data.";
+
+  } catch (error) {
+    statusEl.textContent = "Profile verification failed";
+    resultEl.textContent = error.message;
+    loadBtn.disabled = true;
+  }
+});
+
+loadBtn.addEventListener("click", async () => {
+  if (!auth.currentUser || !currentTenant) return;
+
+  loadBtn.disabled = true;
+  resultEl.textContent = "Loading tenant documents...";
+
+  try {
+    const docsRef = collection(
+      db, "tenants", currentTenant, "documents"
+    );
+
+    const snapshot = await getDocs(docsRef);
+
+    const documents = snapshot.docs.map(item => ({
+      id: item.id,
+      ...item.data()
+    }));
+
+    resultEl.textContent = documents.length
+      ? JSON.stringify(documents, null, 2)
+      : "No documents found.";
+
+  } catch (error) {
+    resultEl.textContent = "ACCESS DENIED or ERROR: " + error.message;
+  } finally {
+    loadBtn.disabled = false;
+  }
+});
+
+document.getElementById("logoutBtn").addEventListener("click", async () => {
+  await signOut(auth);
+  window.location.replace("index.html");
+});
+</script>
+</body>
+</html>
+
