@@ -1,1 +1,199 @@
 
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cloud Security Monitor | Login</title>
+
+<style>
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  padding: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: Arial, sans-serif;
+  background: #08111f;
+  color: #e8eef8;
+}
+
+.card {
+  width: 100%;
+  max-width: 410px;
+  padding: 32px 25px;
+  background: #111d30;
+  border: 1px solid #263955;
+  border-radius: 18px;
+  box-shadow: 0 20px 55px rgba(0,0,0,.35);
+}
+
+.logo {
+  font-size: 38px;
+  text-align: center;
+  margin-bottom: 15px;
+}
+
+h1 {
+  text-align: center;
+  font-size: 24px;
+  margin-bottom: 8px;
+}
+
+.subtitle {
+  text-align: center;
+  color: #9aabc3;
+  font-size: 13px;
+  line-height: 1.6;
+  margin-bottom: 28px;
+}
+
+label {
+  display: block;
+  margin: 14px 0 7px;
+  font-size: 13px;
+  color: #c9d9f2;
+}
+
+input {
+  width: 100%;
+  padding: 14px;
+  background: #0b1628;
+  border: 1px solid #344762;
+  border-radius: 9px;
+  color: white;
+  font-size: 15px;
+  outline: none;
+}
+
+input:focus { border-color: #3998ff; }
+
+button {
+  width: 100%;
+  padding: 14px;
+  margin-top: 22px;
+  background: #1677e8;
+  color: white;
+  border: none;
+  border-radius: 9px;
+  font-size: 15px;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: .6;
+}
+
+#message {
+  margin-top: 16px;
+  color: #ff9b9b;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+.footer {
+  margin-top: 25px;
+  text-align: center;
+  color: #71849f;
+  font-size: 11px;
+}
+</style>
+</head>
+
+<body>
+<div class="card">
+  <div class="logo">🔐</div>
+
+  <h1>Cloud Security Monitor</h1>
+  <p class="subtitle">
+    Secure Multi-Tenant Cloud Access<br>
+    Enterprise Security Platform
+  </p>
+
+  <form id="loginForm">
+    <label for="email">Email Address</label>
+    <input id="email" type="email"
+      placeholder="Enter your email" required>
+
+    <label for="password">Password</label>
+    <input id="password" type="password"
+      placeholder="Enter your password" required>
+
+    <button id="loginBtn" type="submit">
+      Sign In Securely
+    </button>
+  </form>
+
+  <div id="message" role="status"></div>
+
+  <div class="footer">
+    Multi-Tenant Cloud Security System
+  </div>
+</div>
+
+<script type="module">
+import { initializeApp } from
+"https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+
+import {
+  getAuth,
+  signInWithEmailAndPassword,
+  onAuthStateChanged
+} from
+"https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyDyAqQKO-0cB1CCgVb3JYvn2FSfgPWKK7o",
+  authDomain: "multi-tenant-cloud-security.firebaseapp.com",
+  projectId: "multi-tenant-cloud-security",
+  storageBucket: "multi-tenant-cloud-security.firebasestorage.app",
+  messagingSenderId: "241642930606",
+  appId: "1:241642930606:web:08e08cde26360cecdf883f"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+
+const form = document.getElementById("loginForm");
+const message = document.getElementById("message");
+const loginBtn = document.getElementById("loginBtn");
+
+onAuthStateChanged(auth, (user) => {
+  if (user) {
+    window.location.replace("dashboard.html");
+  }
+});
+
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  const email = document.getElementById("email").value.trim();
+  const password = document.getElementById("password").value;
+
+  loginBtn.disabled = true;
+  loginBtn.textContent = "Signing in...";
+  message.textContent = "";
+
+  try {
+    await signInWithEmailAndPassword(auth, email, password);
+    message.style.color = "#50d69a";
+    message.textContent = "Login successful. Opening dashboard...";
+    window.location.replace("dashboard.html");
+  } catch (error) {
+    message.style.color = "#ff9b9b";
+    message.textContent = "Login failed: " + error.message;
+  } finally {
+    loginBtn.disabled = false;
+    loginBtn.textContent = "Sign In Securely";
+  }
+});
+</script>
+</body>
+</html>
+
